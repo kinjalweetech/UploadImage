@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+      "target": "es2016",
+      "rootDir": "./",
+      "module": "commonjs",
+      "moduleResolution": "node",
+      "emitDecoratorMetadata": true,
+      "experimentalDecorators": true,
+      "outDir": "./dist",
+      "esModuleInterop": true,
+      "forceConsistentCasingInFileNames": true,
+      "skipLibCheck": true,
+      "typeRoots": ["node_modules/@types"]
+    },
+    "exclude": ["node_modules", "dist", "src/__tests__/*"],
+    "rules": {
+      "@typescript-eslint/no-explicit-any": ["off"]
+    }
+  }
