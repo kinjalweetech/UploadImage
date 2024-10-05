@@ -1,110 +1,130 @@
-import admin from 'firebase-admin';
-// import { Storage } from '@google-cloud/storage';
-import * as path from 'path';
-import dotenv from 'dotenv';
-import { existsSync, mkdirSync } from "fs";
 import express, { Request, Response } from "express";
 import multer from "multer";
-import { v4 as uuidv4 } from 'uuid';
-import { ImageModel } from './Model/imaUploadModel';
-// import serviceAccount from "../upload-img-8959c-firbase-adminsdk-oyrci-70136cb837.json" assert {type: "json"};
-// import { ImageModel } from './models/ImageModel';  // Assuming you have an Image model defined
+import admin from "firebase-admin";
+import { v4 as uuidv4 } from "uuid";
+import path from "path";
+import fs from "fs";
+import dotenv from "dotenv";
 
+// Load environment variables
 dotenv.config();
 
-// Initialize Firebase Admin SDK
-// import {serviceAccount} from './upload-img-8959c-firbase-adminsdk-oyrci-70136cb837.json'
+// Initialize Express app
+const app = express();
+const port = process.env.SERVER_PORT || 3000;
 
-const serviceAccount = require("../upload-img-8959c-firebase-adminsdk-oyrci-70136cb837.json");
+// Initialize Firebase Admin SDK
+const serviceAccount = require("../upload-img-8959c-firebase-adminsdk-oyrci-9086c9edc8.json");
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  storageBucket: "upload-img-8959c.appspot.com"
+  storageBucket: "upload-img-8959c.appspot.com", // Replace with your Firebase Storage bucket URL
 });
 
-const bucket = admin.storage().bucket();  // This references your Firebase Storage bucket
+const bucket = admin.storage().bucket(); // Initialize Firebase bucket
 
-const app = express();
-const port = process.env.server_port || 7000;
+// Set up Multer for file storage
+const storage = multer.memoryStorage(); // Use memory storage to store files temporarily before uploading to Firebase
+const upload = multer({ storage }); // Initialize Multer
 
-app.use(express.json());
+// Data structure to store image info with unique IDs (In-memory for now)
+let imageStore: { id: string; fileName: string; publicUrl: string; localPath: string }[] = [];
 
-// Ensure directories exist before file upload (this is for local storage)
-const ensureDirectoriesExist = () => {
-  const directories = [
-    "src/ASSETS/PDF",
-    "src/ASSETS/Images",
-    "src/ASSETS/Videos",
-  ];
-  directories.forEach((dir) => {
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-  });
-};
-ensureDirectoriesExist();
-
-// Multer setup for handling file uploads
-const storage = multer.memoryStorage();  // Use memory storage for handling Firebase uploads
-const upload = multer({ storage });
-
-// Handle the file upload to Firebase
-app.post('/upload', upload.single('file'), async (req: Request, res: Response):Promise<void> => {
+// Route to upload a file to Firebase Cloud Storage and save locally
+app.post("/upload", upload.single("file"), async (req: Request, res: Response): Promise<void> => {
+  // Check if a file was uploaded
   if (!req.file) {
-  res.status(400).send('No file uploaded.');
-  return
+    res.status(400).send("No file uploaded.");
+    return;
   }
 
   try {
-    const ext = path.extname(req.file.originalname).toLowerCase();
-    const uniqueName = `${uuidv4()}${ext}`;
+    const ext = path.extname(req.file.originalname).toLowerCase(); // Get file extension
+    const uniqueFileName = `${uuidv4()}${ext}`; // Create a unique file name with UUID
+    const imageId = uuidv4(); // Generate unique ID for the image
 
-    const file = bucket.file(uniqueName);
-    
-    // Create a stream for Firebase Storage upload
+    // Save the file locally
+    const localFilePath = path.join(__dirname, "Assets", uniqueFileName); // Ensure "Assets" folder exists
+    fs.writeFileSync(localFilePath, req.file.buffer);
+
+    console.log(`File saved locally at ${localFilePath}`);
+
+    // Create a file reference in Firebase Storage
+    const file = bucket.file(uniqueFileName);
+
+    // Create a write stream to upload the file to Firebase
     const stream = file.createWriteStream({
       metadata: {
-        contentType: req.file.mimetype,
+        contentType: req.file.mimetype, // Set the MIME type of the file
       },
     });
 
-    stream.on('error', (err) => {
-      console.error(err);
-      res.status(500).send('Failed to upload image.');
+    // Handle error during file upload
+    stream.on("error", (err) => {
+      console.error("Stream Error: ", err);
+      res.status(500).send("Error uploading file.");
     });
 
-    stream.on('finish', async () => {
-      // Make the file public
+    // Handle successful file upload
+    stream.on("finish", async () => {
+      // Make the uploaded file public (optional)
       await file.makePublic();
 
-      // Get the public URL for the uploaded image
+      // Get the public URL of the file
       const publicUrl = `https://storage.googleapis.com/${bucket.name}/${file.name}`;
 
-      // Save image details to MongoDB
-      const newImage = new ImageModel({
-        filename: uniqueName,
-        url: publicUrl,
-        ext_name: ext,
+      // Store the image data with its unique ID
+      imageStore.push({
+        id: imageId,
+        fileName: uniqueFileName,
+        publicUrl: publicUrl,
+        localPath: localFilePath,
       });
 
-      await newImage.save();
-
+      // Send a success response with the public URL and image ID
       res.status(200).json({
-        message: 'File uploaded successfully!',
-        url: publicUrl,
+        message: "File uploaded successfully to Firebase and saved locally!",
+        imageId: imageId,
+        firebaseUrl: publicUrl,
+        localPath: localFilePath,
       });
     });
 
-    stream.end(req.file.buffer);  // End the stream by passing the file buffer
-
+    // End the stream and upload the file from memory
+    stream.end(req.file.buffer);
   } catch (error) {
-    console.error(error);
-    res.status(500).send('Error uploading image.');
+    console.error("Error uploading to Firebase: ", error);
+    res.status(500).json({ message: "Failed to upload file.", error: error.message });
   }
+});
+
+// Route to access the uploaded image by its unique ID
+app.get("/image/:id", (req: Request, res: Response) => {
+  const imageId = req.params.id;
+
+  // Find the image in the store using the ID
+  const image = imageStore.find((img) => img.id === imageId);
+
+  if (!image) {
+    res.status(404).send("Image not found.");
+    return;
+  }
+
+  // Send back the image's public URL and local path
+  res.status(200).json({
+    message: "Image found!",
+    fileName: image.fileName,
+    publicUrl: image.publicUrl,
+    localPath: image.localPath,
+  });
+});
+
+// Simple route to check server status
+app.get("/", (req, res) => {
+  res.send("Server is running");
 });
 
 // Start the server
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
-
-export default app;

@@ -8,4 +8,4 @@ const imageSchema = new Schema<IImage>({
   createdAt: { type: Date, default: Date.now },
 });
 
-export const ImageModel = model<IImage>('Image', imageSchema);
+export const ImageModel = model<IImage>('Image1', imageSchema);
